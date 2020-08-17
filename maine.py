@@ -1,6 +1,6 @@
 import json
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Dataset
 from torch.utils.tensorboard import SummaryWriter
 from transformers import BertTokenizer, BertModel
 import time
@@ -18,6 +18,20 @@ original = 'data/persona_self_original.json'
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
+class PersonaData(Dataset):
+    def __init__(self, data, entokener):
+        self.data = data
+        self.tokenizer = entokener
+
+    def __getitem__(self, index):
+        return self.data[index]['history'], self.data[index]['candidates']
+
+    def tokize(self, sample):
+        return self.tokenizer(sample, padding=True, truncation=True, return_tensors='pt')
+
+    def __len__(self):
+        return len(self.data)
+
 def prepere(data, len_fun):
     blou = []
     dialogs = []
@@ -28,7 +42,7 @@ def prepere(data, len_fun):
             utt['history'] = ['' if u == '__ SILENCE __' else u 
                     for u in utt['history']]
             blou.append(utt['candidates'][-1])
-        dialogs.append(dialog['utterances'])
+            dialogs.append(utt)
     return dialogs, blou
 
 
@@ -46,11 +60,7 @@ def infer(model, context, space, tokenizer):
 
 
 def tok(data, tokenizer):
-    return encude(tokenizer(data, padding=True, truncation=True, return_tensors='pt'))
-
-
-def encude(encoding, device=device):
-    return {k: v.to(device) for k, v in encoding.items()}
+    return tokenizer(data, padding=True, truncation=True, return_tensors='pt')
 
 
 def validate(model, val_data, utter_space, tokenizer):
@@ -73,7 +83,6 @@ def save_checkpoint(path, model, optimizer, loss, epoch):
 
 def load_checkpoint(path):
     checkpoint = torch.load(path)
-
     model = BertRetrieval(checkpoint['out_dim'], FREEZE)
     optimizer = torch.optim.Adam(lr=2e-5, params=model.parameters())
     loss = checkpoint['loss']
@@ -111,18 +120,15 @@ class BertRetrieval(torch.nn.Module):
         return condensed
 
 def trayn(model, train_loader, val_data, epoch_start, epoch_end):
-    
     model.train()
     for e in range(epoch_start, epoch_end):
-        for i, data in tqdm.tqdm(enumerate(train_loader)):
+        for i, data in enumerate(tqdm.tqdm(train_loader)):
+            contexts, targets = data
+            targets = targets[-1]
+            contexts = [c for c in contexts]
+            contexts, targets = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt')
             
-            targets = data['utterances'][0]['candidates'][-1]
-            contexts = data['utterances'][0]['history'][0]
-            
-            inputs = tok(contexts, tokenizer)
-            targets = tok(targets, tokenizer)
-    
-            outputs = model(**inputs)
+            outputs = model(**contexts)
             with torch.no_grad():
                 targets = model(**targets)
 
@@ -140,21 +146,21 @@ def trayn(model, train_loader, val_data, epoch_start, epoch_end):
 if __name__ == '__main__':
 
     writer = SummaryWriter()
+
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     
     with open(original, 'r') as j_in:
         P = json.load(j_in)
     
     train_data, BIG_LIST_OF_U = prepere(P['train'], 
                                         lambda u: len(u['history']) == 5)
-
     train_loader = DataLoader(
-        train_data,
-        batch_size=64, 
-        shuffle=True)
+        PersonaData(train_data, tokenizer),
+        batch_size=32, 
+        shuffle=True,
+        drop_last=True)
     
-    val_data = DataLoader(P['valid'])
-    
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    val_loader = DataLoader(P['valid'])
     
     try:
         model, optimizer, loss, epoch = load_checkpoint(CHECK_P)
@@ -173,7 +179,7 @@ if __name__ == '__main__':
         t_start = time.time()
         print('Train start')
         model.to(device)
-        trayn(model, train_data, val_data, epoch, epoch+1)
+        trayn(model, train_loader, val_loader, epoch, epoch+1)
         print(f'Train end {t_start-time.time()}s')
     
     try:
