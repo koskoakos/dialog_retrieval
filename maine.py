@@ -13,7 +13,7 @@ LR=2e-5
 K_OUT = 20
 FREEZE = False
 CHECK_P = 'trained.tar'
-original = 'data/persona_self_original.json'
+original = 'data/personachat_self_original.json'
  
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -24,7 +24,9 @@ class PersonaData(Dataset):
         self.tokenizer = entokener
 
     def __getitem__(self, index):
-        return self.data[index]['history'], self.data[index]['candidates']
+        context = ' . '.join(self.data[index]['history'])
+        target = self.data[index]['candidates'][-1]
+        return context, target
 
     def tokize(self, sample):
         return self.tokenizer(sample, padding=True, truncation=True, return_tensors='pt')
@@ -122,11 +124,12 @@ class BertRetrieval(torch.nn.Module):
 def trayn(model, train_loader, val_data, epoch_start, epoch_end):
     model.train()
     for e in range(epoch_start, epoch_end):
+
         for i, data in enumerate(tqdm.tqdm(train_loader)):
             contexts, targets = data
-            targets = targets[-1]
-            contexts = [c for c in contexts]
-            contexts, targets = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt')
+
+            contexts = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt')
+            targets = tokenizer(targets, padding=True, truncation=True, return_tensors='pt')
             
             outputs = model(**contexts)
             with torch.no_grad():
@@ -156,7 +159,7 @@ if __name__ == '__main__':
                                         lambda u: len(u['history']) == 5)
     train_loader = DataLoader(
         PersonaData(train_data, tokenizer),
-        batch_size=32, 
+        batch_size=16, 
         shuffle=True,
         drop_last=True)
     
