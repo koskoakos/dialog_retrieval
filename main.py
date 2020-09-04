@@ -128,8 +128,8 @@ def train(model, train_loader, val_data, epoch_start, epoch_end):
         for i, data in enumerate(tqdm.tqdm(train_loader)):
             contexts, targets = data
 
-            contexts = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt').to(device)
-            targets = tokenizer(targets, padding=True, truncation=True, return_tensors='pt').to(device)
+            contexts = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt')
+            targets = tokenizer(targets, padding=True, truncation=True, return_tensors='pt')
             
             outputs = model(**contexts)
             with torch.no_grad():
@@ -159,7 +159,7 @@ if __name__ == '__main__':
                                         lambda u: len(u['history']) == 5)
     train_loader = DataLoader(
         PersonaData(train_data, tokenizer),
-        batch_size=32, 
+        batch_size=16, 
         shuffle=True,
         drop_last=True)
     
