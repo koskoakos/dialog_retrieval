@@ -7,6 +7,8 @@ import time
 import tqdm 
 from sklearn.neighbors import BallTree
 import numpy as tf
+from sentence_transformers import SentenceTransformer, util
+import pickle 
 
 
 LR=2e-5
@@ -19,18 +21,23 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 class PersonaData(Dataset):
-    def __init__(self, data, entokener):
+    def __init__(self, data, encoder, **enc_kw):
         self.data = data
-        self.tokenizer = entokener
+        self.encoder = encoder
+        self.encoder_args = enc_kw
 
     def __getitem__(self, index):
-        return self.data[index]['history'], self.data[index]['candidates']
+        context = self.data[index]['history']
+        target = self.data[index]['candidates'][-1]
+        negative = self.data[index]['candidates'][:-1]
+        return tuple(map(self.encode, (context, target, negative)))
 
-    def tokize(self, sample):
-        return self.tokenizer(sample, padding=True, truncation=True, return_tensors='pt')
+    def encode(self, sample):
+        return self.encoder.encode(sample, **self.encoder_args)
 
     def __len__(self):
         return len(self.data)
+
 
 def prepere(data, len_fun):
     blou = []
@@ -54,13 +61,12 @@ def embed(data, encodyr, tokenizer):
 def infer(model, context, space, tokenizer):
     inputs = tok(context, tokenizer)
     outputs = model(**inputs)[1].detach().cpu().numpy().reshape(1, -1)
-    print(outputs)
     distons, indoks = space.query(outputs, k=3)
     return distons[0], indoks[0]
 
 
 def tok(data, tokenizer):
-    return tokenizer(data, padding=True, truncation=True, return_tensors='pt')
+    return tokenizer(data, padding=True, truncation=True, return_tensors='pt').to(device)
 
 
 def validate(model, val_data, utter_space, tokenizer):
@@ -119,14 +125,15 @@ class BertRetrieval(torch.nn.Module):
         condensed = self.dense(sense)
         return condensed
 
-def trayn(model, train_loader, val_data, epoch_start, epoch_end):
+def train(model, train_loader, val_data, epoch_start, epoch_end):
     model.train()
     for e in range(epoch_start, epoch_end):
+
         for i, data in enumerate(tqdm.tqdm(train_loader)):
             contexts, targets = data
-            targets = targets[-1]
-            contexts = [c for c in contexts]
-            contexts, targets = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt')
+
+            contexts = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt').to(device)
+            targets = tokenizer(targets, padding=True, truncation=True, return_tensors='pt').to(device)
             
             outputs = model(**contexts)
             with torch.no_grad():
@@ -143,59 +150,86 @@ def trayn(model, train_loader, val_data, epoch_start, epoch_end):
 
     save_checkpoint(CHECK_P, model, optimizer, loss, e)
 
+class Sequencer(torch.nn.Module):
+    def __init__(self, embedder, input_size=768, out_len=768, hidden_size=100, batch_size=32):
+        super(Sequencer, self).__init__()
+        self.embedder = embedder
+        self.hidden_size = hidden_size
+        self.lstm = torch.nn.LSTM(input_size, hidden_size, batch_first=True)
+        self.linear = torch.nn.Linear(hidden_size * 5, out_len)
+        self.hidden_cell = (torch.zeros(1, batch_size, hidden_size), 
+                            torch.zeros(1, batch_size, hidden_size))
+
+    def forward(self, input_seq):
+        lstm_out, self.hidden_cell = self.lstm(input_seq, self.hidden_cell)
+        linear_out = self.linear(lstm_out.reshape(lstm_out.size(0), -1))
+        return linear_out
+
+
 if __name__ == '__main__':
 
     writer = SummaryWriter()
-
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     
     with open(original, 'r') as j_in:
         P = json.load(j_in)
     
+    ember = SentenceTransformer('distilbert-base-nli-stsb-mean-tokens')
+    
     train_data, BIG_LIST_OF_U = prepere(P['train'], 
                                         lambda u: len(u['history']) == 5)
+    pdata = PersonaData(train_data, ember, convert_to_tensor=True)
     train_loader = DataLoader(
-        PersonaData(train_data, tokenizer),
+        pdata,
         batch_size=32, 
         shuffle=True,
         drop_last=True)
-    
-    val_loader = DataLoader(P['valid'])
-    
+
     try:
-        model, optimizer, loss, epoch = load_checkpoint(CHECK_P)
-        print(f'Loaded model on epoch={epoch}')
+        with open('embedded_corpus.pkl', 'rb') as pickled_corpus:
+            corpus = pickle.load(pickled_corpus)
     except:
         import traceback
         traceback.print_exc()
-        print('Creating a new model')
-        model = BertRetrieval(K_OUT, FREEZE)
-        optimizer = torch.optim.Adam(params=model.parameters(), lr=LR)
-        epoch = 0
-    
-    model.to(device)
-    
-    if epoch < 1:
-        t_start = time.time()
-        print('Train start')
-        model.to(device)
-        trayn(model, train_loader, val_loader, epoch, epoch+1)
-        print(f'Train end {t_start-time.time()}s')
-    
-    try:
-        import pickle
-        with open('utter_map.json', 'rb') as u_in:
-            utter_space = pickle.load(u_in)
-        print('Loaded prebuilt utterance vectors')
-    except:
-        utter_space = u_map(BIG_LIST_OF_U, model, tokenizer)
-        with open('utter_map.json', 'wb') as u_out:
-            pickle.dump(utter_space, u_out, protocol=-1)
-        print(f'Saved {len(BIG_LIST_OF_U)} utterances')
-    
-    history = ['']
+        corpus = ember.encode(BIG_LIST_OF_U, convert_to_tensor=True, show_progress_bar=True)
+
+        with open('embedded_corpus.pkl', 'wb') as pickled_out:
+            pickle.dump(corpus, pickled_out, protocol=-1)
+
+    model = Sequencer(ember)
+    optimizer = torch.optim.Adam(lr=LR, params=model.parameters())
+    EPOCHS = 10
+    loss_fn = torch.nn.MSELoss()
+
+    for e_ix in range(EPOCHS):
+        running_loss = 0
+        with tqdm.tqdm(total=len(train_loader.dataset), desc=f'[Epoch {e_ix+1:2d}/{EPOCHS}]') as progress_bar:
+            for batch_ix, (x, y, not_y) in enumerate(train_loader):
+                optimizer.zero_grad()
+
+                model.hidden_cell = (torch.zeros(1, 32, model.hidden_size),
+                                     torch.zeros(1, 32, model.hidden_size))
+
+                yhat = model(x.to(device))
+                
+                loss = loss_fn(y.to(device), yhat)
+
+                loss.backward()
+
+                optimizer.step()
+
+                running_loss += loss.item()
+
+                progress_bar.set_postfix({'loss': running_loss/(batch_ix+1)})
+                progress_bar.update(x.shape[0])
+            
+            train_loss = running_loss/len(train_loader)
+
+            progress_bar.set_postfix({'loss': train_loss})
+
+
+    history = [''] * 5
     while True:
-        request = input()
+        request = ember.encode(input(), convert_to_tensor=True)
         
         if request == '/reset':
             history = ['']
@@ -203,13 +237,13 @@ if __name__ == '__main__':
         
         if request == '/stop':
             break
-    
-        history.append(request)
-    
-        distance, index = infer(model, history, utter_space, tokenizer)
-        responses = [BIG_LIST_OF_U[i] for i in index]
-        history.append(responses[0])
-        for i in 0, 1, 2:
-            seo = '\t'*i
-            print(f'{seo} - {responses[i]} {distance[i]}')
+
+        context = history[-5:]
+
+        predicted_embedding = model(context)
+        
+        similar_cos = util.pytorch_cos_sim(predicted_embedding, corpus)[0].cpu()
+        best = tf.argpartition(-similar_cos, range(5))[:5]
+        for idx in best:
+            print(BIG_LIST_OF_U[idx].strip(), "(Score: %.4f)" % (similar_cos[idx]))
     
