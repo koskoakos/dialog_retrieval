@@ -22,6 +22,22 @@ original = 'data/personachat_self_original.json'
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
+class PersonaData(Dataset):
+    def __init__(self, data, entokener):
+        self.data = data
+        self.tokenizer = entokener
+
+    def __getitem__(self, index):
+        context = self.enc(self.data[index]['history'])
+        target = self.enc(self.data[index]['candidates'][-1])
+        negative = self.enc(self.data[index]['candidates'][-5:-1])
+        return context, target, negative
+
+    def enc(self, sample):
+        return self.tokenizer(sample, padding='max_length', truncation=True, return_tensors='pt', max_length=64).to(device)
+
+    def __len__(self):
+        return len(self.data)
 
 def prepere(data, len_fun):
     blou = []
@@ -104,33 +120,36 @@ class BertRetrieval(torch.nn.Module):
                 param.requires_grad=False
         self.dense = torch.nn.Linear(768, out_dim)
 
+    def align(self, *tensors):
+        return (tensor.view(len(tensor), -1) for tensor in tensors)
+
     def forward(self, input_ids, attention_mask, token_type_ids):
+        input_ids, attention_mask, token_type_ids = self.align(input_ids, attention_mask, token_type_ids)
         h, sense = self.ber(input_ids, attention_mask, token_type_ids)
         condensed = self.dense(sense)
         return condensed
 
-def train(model, train_loader, val_data, epoch_start, epoch_end):
+def train(model, train_loader, val_data, epoch_start, epoch_end, writer):
     model.train()
     for e in range(epoch_start, epoch_end):
 
         for i, data in enumerate(tqdm.tqdm(train_loader)):
-            contexts, targets = data
-
-            contexts = tokenizer(contexts, padding=True, truncation=True, return_tensors='pt')
-            targets = tokenizer(targets, padding=True, truncation=True, return_tensors='pt')
-            
+            contexts, targets, negative = data
             outputs = model(**contexts)
+
             with torch.no_grad():
                 targets = model(**targets)
+                negative = model(**negative)
 
             optimizer.zero_grad()
 
-            loss = torch.mean(torch.cdist(outputs, targets))
+            loss = torch.mean(torch.cdist(outputs, targets) - 2 * torch.cdist(outputs, negative))
             
             loss.backward()
             optimizer.step()
-            if i % 1000 == 1:
-                print(f'E={e}, Loss={loss}')
+
+        writer.add_scalar("Loss/train", loss, epoch)
+
 
     save_checkpoint(CHECK_P, model, optimizer, loss, e)
 
@@ -147,7 +166,7 @@ if __name__ == '__main__':
                                         lambda u: len(u['history']) == 5)
     train_loader = DataLoader(
         PersonaData(train_data, tokenizer),
-        batch_size=16, 
+        batch_size=32, 
         shuffle=True,
         drop_last=True)
     
@@ -170,7 +189,7 @@ if __name__ == '__main__':
         t_start = time.time()
         print('Train start')
         model.to(device)
-        train(model, train_loader, val_loader, epoch, epoch+1)
+        train(model, train_loader, val_loader, epoch, epoch+1, writer)
         print(f'Train end {t_start-time.time()}s')
     
     try:
