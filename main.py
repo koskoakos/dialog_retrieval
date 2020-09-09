@@ -1,13 +1,16 @@
 import json
+import time
+import tqdm 
 import torch
+import numpy as tf
 from torch.utils.data import DataLoader, random_split, Dataset
 from torch.utils.tensorboard import SummaryWriter
 from transformers import BertTokenizer, BertModel
-import time
-import tqdm 
 from sklearn.neighbors import BallTree
-import numpy as tf
 from sentence_transformers import SentenceTransformer, util
+from ignite.engine import Events, create_supervised_trainer, create_supervised_evaluator
+from ignite.metrics import Loss, Recall, Precision
+
 
 
 LR=2e-5
@@ -19,21 +22,6 @@ original = 'data/personachat_self_original.json'
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-class PersonaData(Dataset):
-    def __init__(self, data, entokener):
-        self.data = data
-        self.tokenizer = entokener
-
-    def __getitem__(self, index):
-        context = ' . '.join(self.data[index]['history'])
-        target = self.data[index]['candidates'][-1]
-        return context, target
-
-    def tokize(self, sample):
-        return self.tokenizer(sample, padding=True, truncation=True, return_tensors='pt')
-
-    def __len__(self):
-        return len(self.data)
 
 def prepere(data, len_fun):
     blou = []
