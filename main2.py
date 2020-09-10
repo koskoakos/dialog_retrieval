@@ -21,7 +21,7 @@ encoder = SentenceTransformer('distilbert-base-nli-stsb-mean-tokens')
 data = load_data('data/persona_self_original.json')
 train_loader, train_utts, val_loader, val_utts = get_loaders(data, encoder, 32, 64)
 
-def train(model, encoder, optimizer, loss_fn, train_loader, max_epochs=5):
+def run(model):
     def train_step(engine, batch):
         model.train()
         optimizer.zero_grad()
@@ -34,12 +34,8 @@ def train(model, encoder, optimizer, loss_fn, train_loader, max_epochs=5):
     
     trainer = Engine(train_step)
     trainer.logger = setup_logger('trainer')
-    trainer.run(train_loader, max_epochs=max_epochs)
+    trainer.run(train_loader, max_epochs=10)
 
-    return model
-
-
-def evaluate(model, encoder, metrics, val_loader):
     def eval_step(engine, batch):
         model.eval()
         with torch.no_grad():
@@ -52,11 +48,23 @@ def evaluate(model, encoder, metrics, val_loader):
     evaluator.logger = setup_logger('evaluator')
     evaluator.run(val_loader)
 
+    val_metrics = {'l1': Loss(loss_fn),
+                   'r1': Recall(average=False)}
 
-val_metrics = {'l1 loss': Loss(loss_fn),
-               'r1': Recall(average=False)
-              }
-
-trained = train(retrieval_model, encoder, optimizer, loss_fn, train_loader)
-evaluate(trained, encoder, val_metrics, val_loader)
-
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_training_results(engine):
+        evaluator.run(train_loader)
+        metrics = evaluator.state.metrics
+        los = metrics['l1']
+        avg_rec = metrics['r1']
+        print(f"Training Results - Epoch: {engine.state.epoch} " 
+              f"L1: {metrics['l1']:.2f} R1: {metrics['r1']:.2f}")
+        
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_validation_results(engine):
+        evaluator.run(val_loader)
+        metrics = evaluator.state.metrics
+        print(f"Validation Results - Epoch: {engine.state.epoch} "
+              f"L1: {metrics['l1']:.2f} R1: {metrics['r1']:.2f}")
+        
+run(retrieval_model)
