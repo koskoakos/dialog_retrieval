@@ -32,25 +32,26 @@ def run(model):
         optimizer.step()
         return loss.item()
     
-    trainer = Engine(train_step)
-    trainer.logger = setup_logger('trainer')
-    trainer.run(train_loader, max_epochs=10)
-
     def eval_step(engine, batch):
         model.eval()
         with torch.no_grad():
             x, not_y, y = (encoder.encode(i[0], convert_to_tensor=True).to(CUDA) for i in batch)
             yhat = model(x)
             return yhat, y
-        
-        
+    
+    trainer = Engine(train_step)
+    trainer.logger = setup_logger('trainer')
+
     evaluator = Engine(eval_step)
     evaluator.logger = setup_logger('evaluator')
-    evaluator.run(val_loader)
-
-    val_metrics = {'l1': Loss(loss_fn),
-                   'r1': Recall(average=False)}
-
+    
+    l1 = Loss(loss_fn)
+    r1 = Recall(average=False)
+    
+    
+    l1.attach(evaluator, 'l1')
+    r1.attach(evaluator, 'r1')
+    
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_training_results(engine):
         evaluator.run(train_loader)
@@ -66,5 +67,12 @@ def run(model):
         metrics = evaluator.state.metrics
         print(f"Validation Results - Epoch: {engine.state.epoch} "
               f"L1: {metrics['l1']:.2f} R1: {metrics['r1']:.2f}")
+
+
+
+    
+    trainer.run(train_loader, max_epochs=10)
+
+
         
 run(retrieval_model)
