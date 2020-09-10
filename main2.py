@@ -43,7 +43,7 @@ def evaluate(model, encoder, metrics, val_loader):
     def eval_step(engine, batch):
         model.eval()
         with torch.no_grad():
-            x, not_y, y = (encoder.encode(i[0], covert_to_tensor=True).to(CUDA) for i in batch)
+            x, not_y, y = (encoder.encode(i[0], convert_to_tensor=True).to(CUDA) for i in batch)
             yhat = model(x)
             return yhat, y
         
