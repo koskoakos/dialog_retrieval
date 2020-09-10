@@ -3,7 +3,7 @@ from model import Retriever
 from processing import prepare, get_loaders, load_data
 from ignite.metrics import Loss, Recall
 from ignite.utils import setup_logger
-from ignite.engine import create_supervised_trainer, create_supervised_evaluator, Engine
+from ignite.engine import Engine, Events
 from sentence_transformers import SentenceTransformer
 
 
