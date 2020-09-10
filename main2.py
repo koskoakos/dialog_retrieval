@@ -38,13 +38,25 @@ def train(model, encoder, optimizer, loss_fn, train_loader, max_epochs=5):
 
     return model
 
-evaluator = create_supervised_evaluator(retrieval_model)
+
+def evaluate(model, encoder, metrics, val_loader):
+    def eval_step(engine, batch):
+        model.eval()
+        with torch.no_grad():
+            x, not_y, y = (encoder.encode(i[0], covert_to_tensor=True).to(CUDA) for i in batch)
+            yhat = model(x)
+            return yhat, y
+        
+        
+    evaluator = Engine(eval_step)
+    evaluator.logger = setup_logger('evaluator')
+    evaluator.run(val_loader)
+
+
 val_metrics = {'l1 loss': Loss(loss_fn),
                'r1': Recall(average=False)
               }
 
 trained = train(retrieval_model, encoder, optimizer, loss_fn, train_loader)
-
-evaluator.logger = setup_logger('evaluator')
-evaluator.run(val_loader)
+evaluate(trained, encoder, val_metrics, val_loader)
 
