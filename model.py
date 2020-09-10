@@ -9,6 +9,7 @@ class Retriever(torch.nn.Module):
         self.output = torch.nn.Linear(hid_dim, out_dim)
 
     def forward(self, X):
-        X = self.input(X)
-        X = self.linear(X)
-        return self.output(X)
+        
+        X = self.input(X).view(X.size(0), -1)
+        X = self.linear(X).view(X.size(0), -1)
+        return self.output(X).view(X.size(0), -1)
