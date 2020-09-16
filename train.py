@@ -1,38 +1,42 @@
+
+
 import torch
 from model import Retriever
-from processing import prepare, get_loaders, load_data
+from config import RetrieverConfig as Config
+from processing import prepare, get_loaders, load_data, encode_plus
 from ignite.metrics import Loss, Recall
 from ignite.utils import setup_logger
 from ignite.engine import Engine, Events
 from sentence_transformers import SentenceTransformer
+from torch.utils.tensorboard import SummaryWriter
 
+writer = SummaryWriter()
 
-CUDA = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-
+CUDA = Config.device
 retrieval_model = Retriever()
 
 retrieval_model.to(CUDA)
-optimizer = torch.optim.Adam(retrieval_model.parameters(), lr=0.0001)
-loss_fn = torch.nn.L1Loss(reduction='sum').to(CUDA)
+optimizer = torch.optim.Adam(retrieval_model.parameters(), lr=Config.LR)
+loss_fn = torch.nn.L1Loss().to(CUDA)
 
-encoder = SentenceTransformer('distilbert-base-nli-stsb-mean-tokens')
+encoder = SentenceTransformer(Config.sentence_transformer)
 
 data = load_data('data/persona_dev.json')
-train_loader, train_utts, val_loader, val_utts = get_loaders(data, encoder, 64, 64)
+train_loader, train_utts, val_loader, val_utts = get_loaders(data, 
+                                                             encoder, 
+                                                             Config.batch_size)
 
 def run(model):
     def train_step(engine, batch):
         model.train()
         optimizer.zero_grad()
-        x, not_ys, y = batch
-        x = encoder.encode(x[0], convert_to_tensor=True).to(CUDA)
-        not_ys = [encoder.encode(not_y, convert_to_tensor=True).to(CUDA) for not_y in not_ys]
-        y = encoder.encode(y, convert_to_tensor=True).to(CUDA)
+        x, not_ys, y = encode_plus(batch, encoder, CUDA)
+
         yhat = model(x)
         loss = loss_fn(yhat, y)
-        gains = torch.sum(torch.stack([loss_fn(not_y, y) for not_y in not_ys])) / 20.0
-        loss /= gains
+        gains = loss_fn(not_ys, y) * Config.negative_weight
+        loss -= gains
+
         loss.backward()
         optimizer.step()
         return loss.item()
@@ -40,10 +44,7 @@ def run(model):
     def eval_step(engine, batch):
         model.eval()
         with torch.no_grad():
-            x, not_ys, y = batch
-            x = encoder.encode(x[0], convert_to_tensor=True).to(CUDA)
-            not_ys = [encoder.encode(not_y, convert_to_tensor=True).to(CUDA) for not_y in not_ys]
-            y = encoder.encode(y, convert_to_tensor=True).to(CUDA)
+            x, _, y = encode_plus(batch, encoder, CUDA)
             yhat = model(x)
             return yhat, y
     
@@ -57,7 +58,7 @@ def run(model):
     
     l1.attach(evaluator, 'l1')
     
-    @trainer.on(Events.ITERATION_COMPLETED(every=1))
+    @trainer.on(Events.ITERATION_COMPLETED(every=5))
     def log_training(engine):
         batch_loss = engine.state.output
         lr = optimizer.param_groups[0]['lr']
@@ -65,6 +66,7 @@ def run(model):
         n = engine.state.max_epochs
         i = engine.state.iteration
         print("Epoch {}/{} : {} - batch loss: {}, lr: {}".format(e, n, i, batch_loss, lr))
+        writer.add_scalar('Training/loss', batch_loss, i)
 
     
     @trainer.on(Events.EPOCH_COMPLETED)
@@ -72,7 +74,8 @@ def run(model):
         evaluator.run(train_loader)
         metrics = evaluator.state.metrics
         print(f"Training Results - Epoch: {engine.state.epoch} " 
-              f"L1: {metrics['l1']:.2f}")
+              f" L1: {metrics['l1']:.2f}")
+        writer.add_scalar('Training/Avg loss', metrics['l1'], engine.state.epoch)
         
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_validation_results(engine):
@@ -80,7 +83,8 @@ def run(model):
         metrics = evaluator.state.metrics
         print(f"Validation Results - Epoch: {engine.state.epoch} "
               f"L1: {metrics['l1']:.2f}")
+        writer.add_scalar('Validation/Avg loss', metrics['l1'], engine.state.epoch)
 
-    trainer.run(train_loader, max_epochs=10)
+    trainer.run(train_loader, max_epochs=Config.max_epochs)
         
 run(retrieval_model)

@@ -1,4 +1,5 @@
 import json
+import torch
 from torch.utils.data import Dataset, DataLoader
 from sentence_transformers import SentenceTransformer, util
 
@@ -41,19 +42,49 @@ class PersonaData(Dataset):
         return len(self.data)
 
 
-def get_loaders(data, encoder, train_batch_size, val_batch_size, predicate=(lambda u: len(u['history']) == 1)):
+def encode_plus(batch, encoder, device):
+    x, not_ys, y = batch
+    x = encoder.encode(x[0], convert_to_tensor=True).to(device)
+    not_ys = torch.stack([encoder.encode(not_y, convert_to_tensor=True).to(device) for not_y in not_ys])
+    y = encoder.encode(y, convert_to_tensor=True).to(device)
+    return x, not_ys, y
+
+
+def get_loaders(data, encoder, batch_size, predicate=(lambda u: len(u['history']) == 1)):
     train_data, train_utts = prepare(data['train'], predicate)
     val_data, val_utts = prepare(data['valid'], predicate)
     train_loader = DataLoader(
         PersonaData(train_data),
-        batch_size=train_batch_size,
+        batch_size=batch_size,
         shuffle=True,
         drop_last=True
         )
     val_loader = DataLoader(
         PersonaData(val_data),
-        batch_size=val_batch_size,
+        batch_size=batch_size,
         shuffle=True,
         drop_last=True
     )
     return train_loader, train_utts, val_loader, val_utts
+
+
+def query(model, contexts, space, map, k=1):
+    """
+    Parameters:
+        request: array-like
+            Embedded dialog histories
+        space: BallTree (or k-dTree)
+            Space of all embedded dialog utterances
+        k: int
+            Amount of nearest vectors to return
+    Returns:
+        (indices, distances): ([int], [float])
+            Indices and distances (sorted) to the nearest vectors
+    """
+    outputs = model(**contexts).detach().cpu().numpy().reshape(1, -1)
+    distances, indices = space.query(outputs, k)
+    return {map[idx]: distances[i] for i, idx in enumerate(indices)}
+
+
+def embed(sentences):
+    pass
