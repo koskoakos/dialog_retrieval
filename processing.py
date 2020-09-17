@@ -9,15 +9,15 @@ def load_data(path):
         return json.load(j_in)
 
 
-def prepare(data, len_fun):
+def prepare(data, min_length):
     blou = []
     dialogs = []
     for dialog in data:
         for utt in dialog['utterances']:
-            if not len_fun(utt):
-                continue
             utt['history'] = ['' if u == '__ SILENCE __' else u 
                     for u in utt['history']]
+            if len(utt['history']) < min_length:
+                utt['history'][:min_length] = [''] * (min_length - len(utt['history'])) + utt['history']
             blou.append(utt['candidates'][-1])
             dialogs.append(utt)
     return dialogs, blou
@@ -50,9 +50,9 @@ def encode_plus(batch, encoder, device):
     return x, not_ys, y
 
 
-def get_loaders(data, encoder, batch_size, predicate=(lambda u: len(u['history']) == 1)):
-    train_data, train_utts = prepare(data['train'], predicate)
-    val_data, val_utts = prepare(data['valid'], predicate)
+def get_loaders(data, encoder, batch_size, context_length=3):
+    train_data, train_utts = prepare(data['train'], context_length)
+    val_data, val_utts = prepare(data['valid'], context_length)
     train_loader = DataLoader(
         PersonaData(train_data),
         batch_size=batch_size,
@@ -88,3 +88,5 @@ def query(model, contexts, space, map, k=1):
 
 def embed(sentences):
     pass
+
+

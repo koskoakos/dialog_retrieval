@@ -1,5 +1,3 @@
-
-
 import torch
 from model import Retriever
 from config import RetrieverConfig as Config
@@ -9,6 +7,7 @@ from ignite.utils import setup_logger
 from ignite.engine import Engine, Events
 from sentence_transformers import SentenceTransformer
 from torch.utils.tensorboard import SummaryWriter
+
 
 writer = SummaryWriter()
 
