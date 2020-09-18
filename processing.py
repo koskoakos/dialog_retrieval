@@ -84,9 +84,3 @@ def query(model, contexts, space, map, k=1):
     outputs = model(**contexts).detach().cpu().numpy().reshape(1, -1)
     distances, indices = space.query(outputs, k)
     return {map[idx]: distances[i] for i, idx in enumerate(indices)}
-
-
-def embed(sentences):
-    pass
-
-

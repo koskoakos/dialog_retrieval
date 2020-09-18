@@ -7,7 +7,8 @@ from ignite.utils import setup_logger
 from ignite.engine import Engine, Events
 from sentence_transformers import SentenceTransformer
 from torch.utils.tensorboard import SummaryWriter
-
+from metrics import RecallAt
+from sklearn.neighbors import BallTree
 
 writer = SummaryWriter()
 
@@ -20,7 +21,7 @@ loss_fn = torch.nn.L1Loss().to(CUDA)
 
 encoder = SentenceTransformer(Config.sentence_transformer)
 
-data = load_data('data/persona_dev.json')
+data = load_data('data/personachat_self_original.json')
 train_loader, train_utts, val_loader, val_utts = get_loaders(data, 
                                                              encoder, 
                                                              Config.batch_size)
@@ -53,8 +54,16 @@ def run(model):
     evaluator = Engine(eval_step)
     evaluator.logger = setup_logger('evaluator')
     
+    utterance_map = BallTree(encoder.encode(train_utts))
+
     l1 = Loss(loss_fn)
-    
+
+    r1 = RecallAt(1, utterance_map)
+    r3 = RecallAt(3, utterance_map)
+    r10 = RecallAt(10, utterance_map)
+
+    r1.attach(trainer, 'r@1')
+    r3.attach(trainer, 'r@3')
     l1.attach(evaluator, 'l1')
     
     @trainer.on(Events.ITERATION_COMPLETED(every=5))
@@ -64,17 +73,22 @@ def run(model):
         e = engine.state.epoch
         n = engine.state.max_epochs
         i = engine.state.iteration
+        metrics = engine.state.metrics
         print("Epoch {}/{} : {} - batch loss: {}, lr: {}".format(e, n, i, batch_loss, lr))
         writer.add_scalar('Training/loss', batch_loss, i)
-
+        writer.add_scalar('Training/R1', metrics['r@1'], i)
+        writer.add_scalar('Training/R3', metrics['r@3'], i)
     
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_training_results(engine):
         evaluator.run(train_loader)
         metrics = evaluator.state.metrics
         print(f"Training Results - Epoch: {engine.state.epoch} " 
-              f" L1: {metrics['l1']:.2f}")
+              f" L1: {metrics['l1']:.2f} "
+              f" R@1: {metrics['r@1']:.2f} "
+              f" R@3: {metrics['r@3']:.2f} ")
         writer.add_scalar('Training/Avg loss', metrics['l1'], engine.state.epoch)
+        writer.add_scalar('Training/Avg R1', metrics['r@1'], engine.state.epoch)
         
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_validation_results(engine):

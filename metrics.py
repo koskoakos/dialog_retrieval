@@ -20,10 +20,14 @@ class RecallAt(Metric):
 
     def update(self, output):
         y_pred, y = output
-        nearest_k, _ = self.latent_space.query(y_pred, self.k)
-        isin_k = (nearest_k[..., None] == y).any(-1).nonzero()
-        self.correct += isin_k
-        self.total += y.size(0)
+        nearest_d, nearest_k = self.latent_space.query(y_pred, self.k)
+        print(nearest_k)
+        approximate_truth = self.latent_space.get_arrays()[0][nearest_k]
+        print(approximate_truth)
+        isin_k = (approximate_truth[:, :, None] == y_pred).all(-1).any(-1).any(-1)
+        print(isin_k)
+        self.correct += isin_k.sum()
+        self.total += y.shape[0]
 
     def compute(self):
         return self.correct / self.total
