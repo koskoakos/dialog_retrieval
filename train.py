@@ -104,7 +104,9 @@ def run(model):
 
 if __name__ == '__main__':
     paper = ArgumentParser()
-    for element, value in vars(Config):
+    for element, value in dir(Config):
+        if element.startswith('__'):
+            continue
         paper.add_argument(f'--{element}', default=value)
     paper.add_argument('--checkpoint')
     args = paper.parse_args()
