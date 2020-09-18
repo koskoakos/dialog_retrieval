@@ -1,4 +1,5 @@
 import torch
+from argparse import ArgumentParser
 from model import Retriever
 from config import RetrieverConfig as Config
 from processing import prepare, get_loaders, load_data, encode_plus
@@ -99,5 +100,13 @@ def run(model):
         writer.add_scalar('Validation/Avg loss', metrics['l1'], engine.state.epoch)
 
     trainer.run(train_loader, max_epochs=Config.max_epochs)
-        
-run(retrieval_model)
+
+
+if __name__ == '__main__':
+    paper = ArgumentParser()
+    for element, value in vars(Config):
+        paper.add_argument(f'--{element}', default=value)
+    paper.add_argument('--checkpoint')
+    args = paper.parse_args()
+    run(retrieval_model)
+
