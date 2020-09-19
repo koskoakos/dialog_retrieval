@@ -11,23 +11,22 @@ from torch.utils.tensorboard import SummaryWriter
 from metrics import RecallAt
 from sklearn.neighbors import BallTree
 
-writer = SummaryWriter()
 
-CUDA = Config.device
-retrieval_model = Retriever()
+def run():
+    writer = SummaryWriter()
 
-retrieval_model.to(CUDA)
-optimizer = torch.optim.Adam(retrieval_model.parameters(), lr=Config.LR)
-loss_fn = torch.nn.L1Loss().to(CUDA)
+    CUDA = Config.device
+    model = Retriever()
 
-encoder = SentenceTransformer(Config.sentence_transformer)
+    model.to(CUDA)
+    optimizer = torch.optim.Adam(model.parameters(), lr=Config.LR)
+    loss_fn = torch.nn.L1Loss().to(CUDA)
 
-data = load_data('data/personachat_self_original.json')
-train_loader, train_utts, val_loader, val_utts = get_loaders(data, 
-                                                             encoder, 
-                                                             Config.batch_size)
+    encoder = SentenceTransformer(Config.sentence_transformer)
 
-def run(model):
+    data = load_data(Config.data_source)
+    train_loader, train_utts, val_loader, val_utts = get_loaders(data, encoder, Config.batch_size)
+
     def train_step(engine, batch):
         model.train()
         optimizer.zero_grad()
@@ -35,7 +34,7 @@ def run(model):
 
         yhat = model(x)
         loss = loss_fn(yhat, y)
-        gains = loss_fn(not_ys, y) * Config.negative_weight
+        gains = loss_fn(not_ys, torch.stack([y] * not_ys.size(0))) * Config.negative_weight
         loss -= gains
 
         loss.backward()
@@ -59,12 +58,9 @@ def run(model):
 
     l1 = Loss(loss_fn)
 
-    r1 = RecallAt(1, utterance_map)
-    r3 = RecallAt(3, utterance_map)
-    r10 = RecallAt(10, utterance_map)
+    recall = RecallAt(utterance_map)
 
-    r1.attach(trainer, 'r@1')
-    r3.attach(trainer, 'r@3')
+    recall.attach(evaluator, 'recall')
     l1.attach(evaluator, 'l1')
     
     @trainer.on(Events.ITERATION_COMPLETED(every=5))
@@ -74,22 +70,20 @@ def run(model):
         e = engine.state.epoch
         n = engine.state.max_epochs
         i = engine.state.iteration
-        metrics = engine.state.metrics
         print("Epoch {}/{} : {} - batch loss: {}, lr: {}".format(e, n, i, batch_loss, lr))
         writer.add_scalar('Training/loss', batch_loss, i)
-        writer.add_scalar('Training/R1', metrics['r@1'], i)
-        writer.add_scalar('Training/R3', metrics['r@3'], i)
     
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_training_results(engine):
         evaluator.run(train_loader)
         metrics = evaluator.state.metrics
+        recall = metrics['recall']
         print(f"Training Results - Epoch: {engine.state.epoch} " 
               f" L1: {metrics['l1']:.2f} "
-              f" R@1: {metrics['r@1']:.2f} "
-              f" R@3: {metrics['r@3']:.2f} ")
+              f" R@1: {recall['r1']:.2f} "
+              f" R@3: {recall['r3']:.2f} ")
         writer.add_scalar('Training/Avg loss', metrics['l1'], engine.state.epoch)
-        writer.add_scalar('Training/Avg R1', metrics['r@1'], engine.state.epoch)
+        writer.add_scalar('Training/R@1', recall['r1'], engine.state.epoch)
         
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_validation_results(engine):
@@ -110,5 +104,7 @@ if __name__ == '__main__':
         paper.add_argument(f'--{element}', default=getattr(Config, element))
     paper.add_argument('--checkpoint')
     args = paper.parse_args()
-    run(retrieval_model)
+    for arg, value in vars(args).items():
+        setattr(Config, arg, value)
+    run()
 

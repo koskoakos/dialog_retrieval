@@ -16,3 +16,6 @@ class RetrieverConfig:
     def update(self, other):
         for k, v in other.items():
             setattr(self, k, v)
+
+    def __iter__(self):
+        return 

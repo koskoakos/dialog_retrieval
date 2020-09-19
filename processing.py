@@ -24,13 +24,14 @@ def prepare(data, min_length):
  
 
 class PersonaData(Dataset):
-    def __init__(self, data, encoder=None, encoder_kw={}):
+    def __init__(self, data, context_length=1, encoder=None, encoder_kw={}):
         self.data = data
+        self.context_length = context_length
         self.encoder = encoder
         self.encoder_kw = encoder_kw
 
     def __getitem__(self, index):
-        context = self.data[index]['history']
+        context = self.data[index]['history'][-self.context_length:]
         target = self.data[index]['candidates'][-1]
         negatives = self.data[index]['candidates'][:-1]
         return context, negatives, target
@@ -54,13 +55,13 @@ def get_loaders(data, encoder, batch_size, context_length=3):
     train_data, train_utts = prepare(data['train'], context_length)
     val_data, val_utts = prepare(data['valid'], context_length)
     train_loader = DataLoader(
-        PersonaData(train_data),
+        PersonaData(train_data, context_length),
         batch_size=batch_size,
         shuffle=True,
         drop_last=True
         )
     val_loader = DataLoader(
-        PersonaData(val_data),
+        PersonaData(val_data, context_length),
         batch_size=batch_size,
         shuffle=True,
         drop_last=True
