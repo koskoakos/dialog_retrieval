@@ -1,6 +1,6 @@
 
 class RetrieverConfig:
-    device = 'cpu'
+    device = 'cuda'
     data_source = 'data/personachat_self_original.json'
     context_length = 1
     negative_samples = 10

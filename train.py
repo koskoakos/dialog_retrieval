@@ -10,6 +10,8 @@ from sentence_transformers import SentenceTransformer
 from torch.utils.tensorboard import SummaryWriter
 from metrics import RecallAt
 from sklearn.neighbors import BallTree
+import pickle
+import os
 
 
 def run():
@@ -17,21 +19,30 @@ def run():
 
     CUDA = Config.device
     model = Retriever()
-
+    print(f'Initializing model on {CUDA}')
     model.to(CUDA)
     optimizer = torch.optim.Adam(model.parameters(), lr=Config.LR)
     loss_fn = torch.nn.L1Loss().to(CUDA)
+    print(f'Creating sentence transformer')
+    encoder = SentenceTransformer(Config.sentence_transformer).to(CUDA)
+    for parameter in encoder.parameters():
+        parameter.requires_grad = False
+    print(f'Loading data')
+    if os.path.exists('_full_dump'):
+        with open('_full_dump', 'rb') as pin:
+            train_loader, train_utts, val_loader, val_utts = pickle.load(pin)
+    else:
+        data = load_data(Config.data_source)
+        train_loader, train_utts, val_loader, val_utts = get_loaders(data, encoder, Config.batch_size)
+    
+        with open('_full_dump', 'wb') as pout:
+            pickle.dump((train_loader, train_utts, val_loader, val_utts), pout, protocol=-1)
 
-    encoder = SentenceTransformer(Config.sentence_transformer)
-
-    data = load_data(Config.data_source)
-    train_loader, train_utts, val_loader, val_utts = get_loaders(data, encoder, Config.batch_size)
 
     def train_step(engine, batch):
         model.train()
         optimizer.zero_grad()
         x, not_ys, y = encode_plus(batch, encoder, CUDA)
-
         yhat = model(x)
         loss = loss_fn(yhat, y)
         gains = loss_fn(not_ys, torch.stack([y] * not_ys.size(0))) * Config.negative_weight
@@ -44,7 +55,7 @@ def run():
     def eval_step(engine, batch):
         model.eval()
         with torch.no_grad():
-            x, _, y = encode_plus(batch, encoder, CUDA)
+            x, _, y = encode_plus((batch[0], [''], batch[2]), encoder, CUDA)
             yhat = model(x)
             return yhat, y
     
@@ -63,7 +74,7 @@ def run():
     recall.attach(evaluator, 'recall')
     l1.attach(evaluator, 'l1')
     
-    @trainer.on(Events.ITERATION_COMPLETED(every=5))
+    @trainer.on(Events.ITERATION_COMPLETED(every=1000))
     def log_training(engine):
         batch_loss = engine.state.output
         lr = optimizer.param_groups[0]['lr']
@@ -75,24 +86,27 @@ def run():
     
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_training_results(engine):
-        evaluator.run(train_loader)
+        evaluator.run(val_loader)
         metrics = evaluator.state.metrics
-        recall = metrics['recall']
         print(f"Training Results - Epoch: {engine.state.epoch} " 
               f" L1: {metrics['l1']:.2f} "
-              f" R@1: {recall['r1']:.2f} "
-              f" R@3: {recall['r3']:.2f} ")
-        writer.add_scalar('Training/Avg loss', metrics['l1'], engine.state.epoch)
-        writer.add_scalar('Training/R@1', recall['r1'], engine.state.epoch)
+              f" R@1: {metrics['r1']:.2f} "
+              f" R@3: {metrics['r3']:.2f} "
+              f" R@10: {metrics['r10']:.2f} ")
+
+        for metric, value in metrics.items():
+            writer.add_scalar(f'Training/{metric}', value, engine.state.epoch)
         
-    @trainer.on(Events.EPOCH_COMPLETED)
+    #@trainer.on(Events.EPOCH_COMPLETED)
     def log_validation_results(engine):
         evaluator.run(val_loader)
         metrics = evaluator.state.metrics
         print(f"Validation Results - Epoch: {engine.state.epoch} "
-              f"L1: {metrics['l1']:.2f}")
-        writer.add_scalar('Validation/Avg loss', metrics['l1'], engine.state.epoch)
-
+              f"L1: {metrics['l1']:.2f} " 
+              f" R@10: {metrics['r10']:.2f} ")
+        for metric, value in metrics.items():
+            writer.add_scalar(f'Validation/{metric}', value, engine.state.epoch)
+ 
     trainer.run(train_loader, max_epochs=Config.max_epochs)
 
 

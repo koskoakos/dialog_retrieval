@@ -14,11 +14,12 @@ class RecallAt(Metric):
 
     def reset(self):
         self.correct = {'r1': 0, 'r3': 0, 'r10': 0}
-        self.total = 0
+        self.total = 0.000001
         super(RecallAt, self).reset()
 
     def update(self, output):
         y_pred, y = output
+        y_pred = y_pred.cpu().numpy()
         _, nearest_k = self.latent_space.query(y_pred, 10)
         approximate_truth = self.latent_space.get_arrays()[0][nearest_k]
         isin10 = (approximate_truth[:, :, None] == y_pred).all(-1).any(-1).any(-1)
@@ -37,3 +38,4 @@ class RecallAt(Metric):
 
 def recall(model, space, data, rank=1):
     pass
+

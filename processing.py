@@ -9,7 +9,7 @@ def load_data(path):
         return json.load(j_in)
 
 
-def prepare(data, min_length):
+def prepare(data, encoder, min_length):
     blou = []
     dialogs = []
     for dialog in data:
@@ -33,7 +33,7 @@ class PersonaData(Dataset):
     def __getitem__(self, index):
         context = self.data[index]['history'][-self.context_length:]
         target = self.data[index]['candidates'][-1]
-        negatives = self.data[index]['candidates'][:-1]
+        negatives = self.data[index]['candidates'][:-2]
         return context, negatives, target
 
     def encode(self, sample):
@@ -46,14 +46,14 @@ class PersonaData(Dataset):
 def encode_plus(batch, encoder, device):
     x, not_ys, y = batch
     x = encoder.encode(x[0], convert_to_tensor=True).to(device)
-    not_ys = torch.stack([encoder.encode(not_y, convert_to_tensor=True).to(device) for not_y in not_ys])
+    not_ys = encoder.encode(not_ys[0], convert_to_tensor=True).unsqueeze(0).to(device)
     y = encoder.encode(y, convert_to_tensor=True).to(device)
     return x, not_ys, y
 
 
-def get_loaders(data, encoder, batch_size, context_length=3):
-    train_data, train_utts = prepare(data['train'], context_length)
-    val_data, val_utts = prepare(data['valid'], context_length)
+def get_loaders(data, encoder, batch_size, context_length=1):
+    train_data, train_utts = prepare(data['train'], encoder, context_length)
+    val_data, val_utts = prepare(data['valid'], encoder, context_length)
     train_loader = DataLoader(
         PersonaData(train_data, context_length),
         batch_size=batch_size,
