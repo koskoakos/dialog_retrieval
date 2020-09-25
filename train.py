@@ -1,6 +1,7 @@
 import torch
 from argparse import ArgumentParser
 from model import Retriever
+from util import interact
 from config import RetrieverConfig as Config
 from processing import prepare, get_loaders, load_data, encode_plus
 from ignite.metrics import Loss, Recall
@@ -11,6 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from metrics import RecallAt
 from sklearn.neighbors import BallTree
 import pickle
+import numpy
 import os
 
 
@@ -42,10 +44,10 @@ def run():
     def train_step(engine, batch):
         model.train()
         optimizer.zero_grad()
-        x, not_ys, y = encode_plus(batch, encoder, CUDA)
-        yhat = model(x)
+        x, not_ys, y = batch
+        yhat = model(x[0])
         loss = loss_fn(yhat, y)
-        gains = loss_fn(not_ys, torch.stack([y] * not_ys.size(0))) * Config.negative_weight
+        gains = loss_fn(not_ys[0], yhat) * Config.negative_weight
         loss -= gains
 
         loss.backward()
@@ -55,8 +57,8 @@ def run():
     def eval_step(engine, batch):
         model.eval()
         with torch.no_grad():
-            x, _, y = encode_plus((batch[0], [''], batch[2]), encoder, CUDA)
-            yhat = model(x)
+            x, _, y = batch
+            yhat = model(x[0])
             return yhat, y
     
     trainer = Engine(train_step)
@@ -65,11 +67,11 @@ def run():
     evaluator = Engine(eval_step)
     evaluator.logger = setup_logger('evaluator')
     
-    utterance_map = BallTree(encoder.encode(train_utts))
+    latent_space = BallTree(numpy.array(list(train_utts.keys())))
 
     l1 = Loss(loss_fn)
 
-    recall = RecallAt(utterance_map)
+    recall = RecallAt(latent_space)
 
     recall.attach(evaluator, 'recall')
     l1.attach(evaluator, 'l1')
@@ -109,14 +111,17 @@ def run():
  
     trainer.run(train_loader, max_epochs=Config.max_epochs)
 
+    torch.save(model.state_dict(), Config.checkpoint)
+    print(f'Saved checkpoint at {Config.checkpoint}')
+    interact(model, encoder, latent_space, train_utts)
+
 
 if __name__ == '__main__':
     paper = ArgumentParser()
     for element in dir(Config):
         if element.startswith('__'):
             continue
-        paper.add_argument(f'--{element}', default=getattr(Config, element))
-    paper.add_argument('--checkpoint')
+        paper.add_argument(f'--{element}', default=getattr(Config, element), type=type(getattr(Config, element)))
     args = paper.parse_args()
     for arg, value in vars(args).items():
         setattr(Config, arg, value)

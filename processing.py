@@ -1,6 +1,7 @@
 import json
 import torch
 from torch.utils.data import Dataset, DataLoader
+from transformers import BertTokenizer
 from sentence_transformers import SentenceTransformer, util
 
 
@@ -13,14 +14,20 @@ def prepare(data, encoder, min_length):
     blou = []
     dialogs = []
     for dialog in data:
+        blou.extend(dialog['utterances'][-1]['history'])
+        blou.append(dialog['utterances'][-1]['candidates'][-1])
         for utt in dialog['utterances']:
-            utt['history'] = ['' if u == '__ SILENCE __' else u 
-                    for u in utt['history']]
             if len(utt['history']) < min_length:
                 utt['history'][:min_length] = [''] * (min_length - len(utt['history'])) + utt['history']
-            blou.append(utt['candidates'][-1])
+
+            utt['history'][:] = encoder.encode(['' if u == '__ SILENCE __' else u 
+                    for u in utt['history']], convert_to_tensor=True)
+
+            utt['candidates'][:] = encoder.encode(utt['candidates'], convert_to_tensor=True)
+
             dialogs.append(utt)
-    return dialogs, blou
+    u_map = {tuple(encoder.encode(u)):u for u in blou}
+    return dialogs, u_map
  
 
 class PersonaData(Dataset):
@@ -33,7 +40,7 @@ class PersonaData(Dataset):
     def __getitem__(self, index):
         context = self.data[index]['history'][-self.context_length:]
         target = self.data[index]['candidates'][-1]
-        negatives = self.data[index]['candidates'][:-2]
+        negatives = self.data[index]['candidates'][0:1]
         return context, negatives, target
 
     def encode(self, sample):
@@ -69,7 +76,7 @@ def get_loaders(data, encoder, batch_size, context_length=1):
     return train_loader, train_utts, val_loader, val_utts
 
 
-def query(model, contexts, space, map, k=1):
+def query(model, contexts, space, u_map, k=1):
     """
     Parameters:
         request: array-like
@@ -82,6 +89,7 @@ def query(model, contexts, space, map, k=1):
         (indices, distances): ([int], [float])
             Indices and distances (sorted) to the nearest vectors
     """
-    outputs = model(**contexts).detach().cpu().numpy().reshape(1, -1)
+    outputs = model(contexts).detach().cpu().numpy().reshape(1, -1)
     distances, indices = space.query(outputs, k)
-    return {map[idx]: distances[i] for i, idx in enumerate(indices)}
+    entries = space.get_arrays()[0][indices[0]]
+    return entries, distances

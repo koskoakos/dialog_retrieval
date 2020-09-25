@@ -4,3 +4,4 @@ runs
 .vscode
 _test.py
 _*
+*.pth

@@ -2,8 +2,10 @@
 class RetrieverConfig:
     device = 'cuda'
     data_source = 'data/personachat_self_original.json'
+    checkpoint = 'checkpoint.pth'
+
     context_length = 1
-    negative_samples = 10
+    negative_samples = 1
     negative_weight = 0.5
 
     batch_size = 32
